@@ -1,0 +1,2 @@
+# visuallyIMpaired
+As our team name suggests, our solution is meant for Visually Impaired People, who are not fortunate enough to use the currently available technologies. Our main goal is to bridge the  gap that prevails between technology and the Visually Impaired People. Our solution is a wearable device in the form of gloves, that helps Visually Impaired to Navigate around without any difficulties, listen to contents of books with precision and fed texts onto digital devices without any hassle.
