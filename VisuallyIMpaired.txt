@@ -1,0 +1,491 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Navigation;
+using Microsoft.Phone.Controls;
+using Microsoft.Phone.Shell;
+using handsight.Resources;
+using System.Windows.Shapes;
+using System.Windows.Media;
+using System.Runtime.InteropServices.WindowsRuntime;
+using Windows.Networking.Proximity;
+using Windows.System;
+using Windows.Networking;
+using Windows.Networking.Sockets;
+using Microsoft.Devices.Sensors;
+using Microsoft.Xna.Framework;
+using System.Diagnostics;
+using Windows.Storage.Streams;
+using System.Threading.Tasks;
+using System.Threading;
+using System.Text.RegularExpressions;
+using Windows.Phone.Speech.Synthesis;
+using WindowsPreview.Media.Ocr;
+using System.IO.IsolatedStorage;
+using System.Windows.Media.Imaging;
+using System.IO;
+using Windows.Phone.Speech.Recognition;
+
+
+namespace handsight
+{
+	public partial class MainPage : PhoneApplicationPage
+	{
+		private Handsight device = null;
+		private bool connected = false;
+
+		private List<Line> lines = new List<Line>();
+		//private Polyline line;
+		private int[] sensors;
+
+		private enum Mode { Edges, Black, Grayscale, Navigation, Typing, Massage, Reading }
+		private Mode mode = Mode.Edges;
+		SpeechSynthesizer speech = new SpeechSynthesizer();
+		SpeechRecognizer recog = new SpeechRecognizer();
+		private const string imagesFolder = "ImagesFromCamera";
+		OcrEngine ocrEngine = new OcrEngine(OcrLanguage.English);
+		private static IsolatedStorageFile _storage = IsolatedStorageFile.GetUserStoreForApplication();
+
+
+
+		// await speech.SpeakTextAsync(text);
+
+		// Constructor
+		public MainPage()
+		{
+			InitializeComponent();
+
+			sensors = new int[6];
+			for (int i = 0; i < 6; i++)
+			{
+				Line line = new Line();
+				line.X1 = i * (Graph.Width - 100) / 6 + 75;
+				line.X2 = line.X1;
+				line.Y1 = 0;
+				line.Y2 = Graph.Height;
+				System.Windows.Media.Color color = i < 4 ? Colors.Green : Colors.Blue;
+				line.Stroke = new SolidColorBrush(color);
+				line.Fill = new SolidColorBrush(color);
+				line.StrokeThickness = 30;
+				lines.Add(line);
+				Graph.Children.Add(line);
+			}
+
+
+		}
+
+		private async void ConnectBtnClick(object sender, RoutedEventArgs e)
+		{
+			if (device == null || connected == false)
+			{
+				StatusLabel.Text = "Connecting...";
+				bool success = await SetupDeviceConn();
+				if (success)
+				{
+					device.Update += DeviceUpdate;
+					if (device != null && device.IsConnected) device.Calibrate(10);
+					SpeechSynthesizer synth = new SpeechSynthesizer();
+
+					await synth.SpeakTextAsync("Air Mode");
+
+					StatusLabel.Text = "Connected";
+					await speech.SpeakTextAsync("connected to device");
+					ConnectButton.Content = "Disconnect";
+					connected = true;
+				}
+				else
+				{
+					StatusLabel.Text = "Not Connected";
+					await speech.SpeakTextAsync("Sorry,not connected");
+				}
+			}
+			else
+			{
+				StatusLabel.Text = "Disconnecting...";
+				await speech.SpeakTextAsync("Disconnecting to Device ");
+				device.Update -= DeviceUpdate;
+				device.Stop(Dispatcher);
+				StatusLabel.Text = "Disconnected";
+				await speech.SpeakTextAsync("Device Disconnected");
+				ConnectButton.Content = "Connect";
+				connected = false;
+			}
+		}
+
+		private void DeviceUpdate(int mode, int[] values, char[] types, string text)
+		{
+			SpeechSynthesizer synth = new SpeechSynthesizer();
+
+			Dispatcher.BeginInvoke(async () =>
+			{
+
+              //  await startListentingtoUser();
+
+
+				Mode newMode = (Mode)Enum.ToObject(typeof(Mode), mode);
+				if (newMode != this.mode)
+				{
+					this.mode = newMode;
+					switch (this.mode)
+					{
+						// case Mode.Edges: EdgesButton.IsChecked = true; break;
+						// case Mode.Black: BlackButton.IsChecked = true; break;
+						// case Mode.Grayscale: GrayscaleButton.IsChecked = true; break;
+						case Mode.Navigation: 
+							NavigationButton.IsChecked = true;
+							textDisplayFromSonar.Visibility = System.Windows.Visibility.Visible;
+							imageGrid.Visibility = System.Windows.Visibility.Collapsed;
+							textDisplayFromIR.Visibility = System.Windows.Visibility.Collapsed;
+							textDisplayFromImage.Visibility = System.Windows.Visibility.Collapsed;
+							break;
+						case Mode.Typing:  
+							TypingButton.IsChecked = true;
+							textDisplayFromIR.Visibility = System.Windows.Visibility.Visible;
+							textDisplayFromSonar.Visibility = System.Windows.Visibility.Collapsed;
+							imageGrid.Visibility = System.Windows.Visibility.Collapsed;
+							textDisplayFromImage.Visibility = System.Windows.Visibility.Collapsed;
+							TextDisplay.Visibility = System.Windows.Visibility.Visible;
+							break; 
+						// case Mode.Massage: MassageButton.IsChecked = true; break;
+						default: break;
+					}
+				}
+                
+				for (int i = 0; i < 6; i++)
+				{
+					sensors[i] = values[i];
+					//read values
+
+					
+					if (i == 5 && mode == 3)
+					{
+						int[] val = new int[2];
+						val[0] = values[4];
+						val[1] = values[5];
+						int av = (int)val.Average();
+						await synth.SpeakTextAsync(av.ToString() + " cm");
+						textDisplayFromSonar.Text = av.ToString() + " cm";
+					}
+					double v = i < 4 ? values[i] / 1024.0 : values[i] / 200.0;
+					double height = i < 4 ? v * Graph.Height : (this.mode == Mode.Navigation ? v * Graph.Height : Graph.Height);
+					if (i < 4)
+					{
+						if (types[i] == '+') { lines[i].Stroke = new SolidColorBrush(Colors.Red); }
+						else if (types[i] == '=') { lines[i].Stroke = new SolidColorBrush(Colors.Green); }
+						else if (types[i] == '-') { lines[i].Stroke = new SolidColorBrush(Colors.White); }
+					}
+					lines[i].Y1 = height;
+				}
+
+				if (text.Length > 0)
+				{
+					TextDisplay.Text += text;
+					TextDisplay.Text = Regex.Replace(TextDisplay.Text, ".\xb2", "");
+					TextDisplay.Text = Regex.Replace(TextDisplay.Text, "\xb2", "");
+					if (TextDisplay.Text.Length > 200)
+
+						TextDisplay.Text = TextDisplay.Text.Substring(TextDisplay.Text.Length - 50, 50);
+
+				   // SpeechSynthesizer synth = new SpeechSynthesizer();
+
+					await synth.SpeakTextAsync(TextDisplay.Text);
+					//wait(2s)
+					// await synth.SpeakTextAsync(buffer[bufferIndex].ToString());
+
+
+					
+				}
+			});
+
+		}
+
+	/*	private async Task startListentingtoUser()
+		{
+			SpeechRecognitionResult res = await recog.RecognizeAsync();
+
+			selectMode(res.Text);
+		}
+
+		private async void selectMode(string choice)
+		{
+			try
+			{
+				if (choice != "")
+				{
+					switch (choice)
+					{
+						case "typing":
+							TypingButton.IsChecked = true;
+							break;
+
+						case "navigation":
+							NavigationButton.IsChecked = true;
+							break;
+						case "reading":
+							ReadingButton.IsChecked = true;
+							break;
+						default:
+						break;
+					}
+
+
+				}
+			}
+			catch
+			{
+				
+				//throw;
+			}
+			await startListentingtoUser();
+		}*/
+
+		private async Task<bool> SetupDeviceConn()
+		{
+			//Connect to your paired NXTCar using BT + StreamSocket (over RFCOMM)
+			PeerFinder.AlternateIdentities["Bluetooth:PAIRED"] = "";
+
+			var devices = await PeerFinder.FindAllPeersAsync();
+			if (devices.Count == 0)
+			{
+				MessageBox.Show("No bluetooth devices are paired, please pair your device");
+				await Windows.System.Launcher.LaunchUriAsync(new Uri("ms-settings-bluetooth:"));
+				return false;
+			}
+
+			PeerInformation peerInfo = devices.FirstOrDefault(c => c.DisplayName.Contains("HC-06"));
+			if (peerInfo == null)
+			{
+				MessageBox.Show("No paired device was found, please pair your handsense device");
+				await Windows.System.Launcher.LaunchUriAsync(new Uri("ms-settings-bluetooth:"));
+				return false;
+			}
+
+			StreamSocket s = new StreamSocket();
+			//This would ask winsock to do an SPP lookup for us; i.e. to resolve the port the 
+			//device is listening on
+			try
+			{
+				await s.ConnectAsync(peerInfo.HostName, "{00001101-0000-1000-8000-00805F9B34FB}");
+			}
+			catch { }
+
+			device = new Handsight(s);
+
+			return device.IsConnected;
+		}
+
+		/*  private void EdgesButton_Checked(object sender, RoutedEventArgs e)
+		  {
+			  if (mode != Mode.Edges)
+			  {
+				  mode = Mode.Edges;
+				  if (device != null && device.IsConnected) device.SetMode((int)mode);
+			  }
+		  }
+
+
+		  private void BlackButton_Checked(object sender, RoutedEventArgs e)
+		  {
+			  if (mode != Mode.Black)
+			  {
+				  mode = Mode.Black;
+				  if(device != null && device.IsConnected) device.SetMode((int)mode);
+			  }
+		  }
+
+		  private void GrayscaleButton_Checked(object sender, RoutedEventArgs e)
+		  {
+			  if (mode != Mode.Grayscale)
+			  {
+				  mode = Mode.Grayscale;
+				  if (device != null && device.IsConnected) device.SetMode((int)mode);
+			  }
+		  }
+		  */
+		private void NavigationButton_Checked(object sender, RoutedEventArgs e)
+		{
+			if (mode != Mode.Navigation)
+			{
+				mode = Mode.Navigation;
+				if (device != null && device.IsConnected) device.SetMode((int)mode);
+			}
+			textDisplayFromIR.Visibility = System.Windows.Visibility.Collapsed;
+			textDisplayFromSonar.Visibility = System.Windows.Visibility.Visible;
+			Graph.Visibility = System.Windows.Visibility.Visible;
+			textDisplayFromImage.Visibility = System.Windows.Visibility.Collapsed;
+		}
+
+		private void TypingButton_Checked(object sender, RoutedEventArgs e)
+		{
+			if (mode != Mode.Typing)
+			{
+				mode = Mode.Typing;
+				if (device != null && device.IsConnected) device.SetMode((int)mode);
+			}
+			textDisplayFromIR.Visibility = System.Windows.Visibility.Visible;
+			textDisplayFromSonar.Visibility = System.Windows.Visibility.Collapsed;
+			TextDisplay.Visibility = System.Windows.Visibility.Visible;
+			Graph.Visibility = System.Windows.Visibility.Visible;
+			textDisplayFromImage.Visibility = System.Windows.Visibility.Collapsed;
+		}
+
+		private async void AirButton_Click(object sender, RoutedEventArgs e)
+		{
+			  if (device != null && device.IsConnected) device.Calibrate(10);
+			SpeechSynthesizer synth = new SpeechSynthesizer();
+
+			await synth.SpeakTextAsync("Air Mode");
+		}
+
+		private void ClearBtn_Click(object sender, RoutedEventArgs e)
+		{
+			TextDisplay.Text = "";
+		}
+
+		private void ReadingBtnChecked(object sender, RoutedEventArgs e)
+		{
+			if (mode != Mode.Reading)
+			{
+				mode = Mode.Reading;
+				Graph.Visibility = System.Windows.Visibility.Collapsed;
+				textDisplayFromImage.Visibility = System.Windows.Visibility.Visible;
+				
+				TextDisplay.Visibility = System.Windows.Visibility.Collapsed;
+				imageGrid.Visibility = System.Windows.Visibility.Visible;
+				textDisplayFromSonar.Visibility = System.Windows.Visibility.Collapsed;
+				Uri imagePath = new Uri(@"http://192.168.1.75/dashboard/abcdef123/a.jpg", UriKind.RelativeOrAbsolute);
+				PicToIsolate(imagePath);
+			}
+		}
+
+		private void PicToIsolate(Uri imagePath)
+		{
+
+			try
+			{
+				WebClient client = new WebClient();
+				BitmapImage image = new BitmapImage();
+				client.OpenReadCompleted += (s, e) =>
+				{
+					if (e.Error != null || e.Cancelled) return;
+					writeToStorage(IsolatedStorageFile.GetUserStoreForApplication(), e.Result, imagesFolder + "\\someimagejpeg");
+					image.SetSource(e.Result);
+					e.Result.Close();
+				};
+				client.OpenReadAsync(imagePath);
+
+			}
+			catch
+			{
+
+				MessageBox.Show("Could not do the thing");
+			}
+
+		}
+
+		private async void writeToStorage(IsolatedStorageFile isolatedStorageFile, System.IO.Stream stream, string fileName)
+		{
+			IsolatedStorageFileStream outputStream = null;
+			try
+			{
+				if (!isolatedStorageFile.DirectoryExists(imagesFolder))
+				{
+					isolatedStorageFile.CreateDirectory(imagesFolder);
+				}
+				if (isolatedStorageFile.FileExists(fileName))
+				{
+					isolatedStorageFile.DeleteFile(fileName);
+				}
+				outputStream = isolatedStorageFile.CreateFile(fileName);
+				byte[] buffer = new byte[32768];
+				int read;
+				while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+				{
+					outputStream.Write(buffer, 0, read);
+				}
+				outputStream.Close();
+				// MessageBox.Show("Image Saved");
+			}
+			catch
+			{
+				if (outputStream != null)
+				{
+					outputStream.Close();
+				}
+				// MessageBox.Show("Image not Saved");
+			}
+			string extractedText = "";
+
+			using (var sourceFile = _storage.OpenFile(fileName, FileMode.Open, FileAccess.Read))
+			{
+				WriteableBitmap bm = new WriteableBitmap(640, 480);
+				bm.SetSource(sourceFile);
+				cameraImage.Source = bm;
+				try
+				{
+					IBuffer buffer = AsBuffer(bm);
+					OcrResult imgResult = await ocrEngine.RecognizeAsync(480, 640, buffer.ToArray());
+					foreach (var line in imgResult.Lines)
+					{
+						foreach (var word in line.Words)
+						{
+							extractedText += word.Text + " ";
+						}
+						extractedText += "\n";
+					}
+					text.Text = extractedText;
+					SpeechSynthesizer spch = new SpeechSynthesizer();
+					await spch.SpeakTextAsync(extractedText);
+				}
+				catch
+				{
+					//
+				}
+			}
+
+		}
+
+		private IBuffer AsBuffer(WriteableBitmap image)
+		{
+			int[] p = image.Pixels;
+			int len = p.Length * 4;
+			byte[] arr = new byte[len];
+			System.Buffer.BlockCopy(p, 0, arr, 0, len);
+			return arr.AsBuffer();
+		}
+
+
+	}
+}
+	  /*    private void MassageButton_Checked(object sender, RoutedEventArgs e)
+		{
+			if (mode != Mode.Massage)
+			{
+				mode = Mode.Massage;
+				if (device != null && device.IsConnected) device.SetMode((int)mode);
+			}
+		}
+*/
+	/*    private async void AirButton_Click(object sender, RoutedEventArgs e)
+		{
+			if (device != null && device.IsConnected) device.Calibrate(10);
+			SpeechSynthesizer synth = new SpeechSynthesizer();
+
+			await synth.SpeakTextAsync("Air Mode");
+
+		}
+/*
+		private void BlackButton_Click(object sender, RoutedEventArgs e)
+		{
+			if (device != null && device.IsConnected) device.Calibrate(11);
+		}
+
+		private void WhiteButton_Click(object sender, RoutedEventArgs e)
+		{
+			if (device != null && device.IsConnected) device.Calibrate(12);
+		}
+	}
+}*/
